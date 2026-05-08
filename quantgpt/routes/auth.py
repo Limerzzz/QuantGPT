@@ -341,7 +341,7 @@ async def me(user: User = Depends(get_current_user)):
         "nickname": user.nickname,
         "has_password": user.password_hash is not None,
         "subscribe_weekly": user.subscribe_weekly,
-        "created_at": user.created_at.isoformat(),
+        "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
 

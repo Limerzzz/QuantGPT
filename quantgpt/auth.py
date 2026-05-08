@@ -158,8 +158,12 @@ async def get_current_user(
 ) -> User:
     """FastAPI dependency: authenticate via API Key (qgpt_*) or JWT."""
     if is_auth_disabled():
-        return _get_dev_user()
-    token = _extract_token(request)
+        try:
+            token = _extract_token(request)
+        except HTTPException:
+            return _get_dev_user()
+    else:
+        token = _extract_token(request)
 
     if token.startswith(_API_KEY_PREFIX):
         user = await _authenticate_api_key(token, db)

@@ -414,7 +414,9 @@ cd QuantGPT
 # 2. 创建虚拟环境并安装依赖
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
+# 可选：装 PostgreSQL 支持
+# pip install -e ".[postgresql]"
 
 # 3. 构建前端（需要 Node.js，从 nodejs.org 下载 LTS 版本）
 cd frontend && npm install && npm run build && cd ..

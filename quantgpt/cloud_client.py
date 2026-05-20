@@ -2,10 +2,13 @@
 
 Uploads locally-computed factor values to quant-gpt.com for independent
 validation, track-record tracking, and public attestation.
+
+Authentication: email/password login, auto-refreshes JWT on 401.
 """
 
 import logging
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -15,7 +18,8 @@ from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
-_ENV_API_KEY = "QUANTGPT_CLOUD_API_KEY"
+_ENV_EMAIL = "QUANTGPT_CLOUD_EMAIL"
+_ENV_PASSWORD = "QUANTGPT_CLOUD_PASSWORD"
 _ENV_BASE_URL = "QUANTGPT_CLOUD_URL"
 _DEFAULT_BASE_URL = "https://quant-gpt.com"
 _UPLOAD_BATCH_SIZE = 30
@@ -38,7 +42,7 @@ def _convert_day(day: dict) -> dict:
 
 
 def is_configured() -> bool:
-    return bool(os.environ.get(_ENV_API_KEY))
+    return bool(os.environ.get(_ENV_EMAIL) and os.environ.get(_ENV_PASSWORD))
 
 
 def get_cloud_url() -> str:
@@ -46,10 +50,18 @@ def get_cloud_url() -> str:
 
 
 class CloudClient:
-    def __init__(self, api_key: str | None = None, base_url: str | None = None):
-        self.api_key = api_key or os.environ.get(_ENV_API_KEY, "")
+    def __init__(
+        self,
+        email: str | None = None,
+        password: str | None = None,
+        base_url: str | None = None,
+    ):
+        self.email = email or os.environ.get(_ENV_EMAIL, "")
+        self.password = password or os.environ.get(_ENV_PASSWORD, "")
         self.base_url = (base_url or get_cloud_url()).rstrip("/")
         self._session: requests.Session | None = None
+        self._token: str = ""
+        self._token_expires: float = 0
 
     def _get_session(self) -> requests.Session:
         if self._session is None:
@@ -60,7 +72,6 @@ class CloudClient:
             self._session.mount("https://", adapter)
             self._session.mount("http://", adapter)
             self._session.headers.update({
-                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
                 "User-Agent": "QuantGPT/1.0",
             })
@@ -68,6 +79,35 @@ class CloudClient:
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
+
+    def _ensure_auth(self) -> None:
+        if self._token and time.time() < self._token_expires:
+            return
+        self._authenticate()
+
+    def _authenticate(self) -> None:
+        s = self._get_session()
+        resp = s.post(
+            self._url("/api/v1/auth/login"),
+            json={"email": self.email, "password": self.password},
+        )
+        if not resp.ok:
+            raise CloudAPIError(f"Cloud login failed (HTTP {resp.status_code}): {resp.text[:200]}")
+        data = resp.json()
+        self._token = data["access_token"]
+        self._token_expires = time.time() + 23 * 3600
+        s.headers["Authorization"] = f"Bearer {self._token}"
+        logger.info("Authenticated with QuantGPT Cloud as %s", self.email)
+
+    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+        self._ensure_auth()
+        s = self._get_session()
+        resp = getattr(s, method)(self._url(path), **kwargs)
+        if resp.status_code == 401:
+            self._token = ""
+            self._ensure_auth()
+            resp = getattr(s, method)(self._url(path), **kwargs)
+        return resp
 
     def _raise_for_error(self, resp: requests.Response, action: str) -> None:
         if resp.ok:
@@ -97,15 +137,12 @@ class CloudClient:
         if claimed_ic_ir is not None:
             payload["claimed_ic_ir"] = claimed_ic_ir
 
-        resp = self._get_session().post(self._url("/api/v1/factors"), json=payload)
+        resp = self._request("post", "/api/v1/factors", json=payload)
         self._raise_for_error(resp, "create_factor")
         return resp.json()
 
     def upload_values(self, factor_id: str, data: list[dict]) -> dict:
-        resp = self._get_session().post(
-            self._url(f"/api/v1/factors/{factor_id}/values"),
-            json={"data": data},
-        )
+        resp = self._request("post", f"/api/v1/factors/{factor_id}/values", json={"data": data})
         self._raise_for_error(resp, "upload_values")
         return resp.json()
 
@@ -118,12 +155,12 @@ class CloudClient:
         return {"uploaded": total_uploaded, "batches": (len(data) + _UPLOAD_BATCH_SIZE - 1) // _UPLOAD_BATCH_SIZE}
 
     def submit_factor(self, factor_id: str) -> dict:
-        resp = self._get_session().post(self._url(f"/api/v1/factors/{factor_id}/submit"))
+        resp = self._request("post", f"/api/v1/factors/{factor_id}/submit")
         self._raise_for_error(resp, "submit_factor")
         return resp.json()
 
     def get_factor(self, factor_id: str) -> dict:
-        resp = self._get_session().get(self._url(f"/api/v1/factors/{factor_id}"))
+        resp = self._request("get", f"/api/v1/factors/{factor_id}")
         self._raise_for_error(resp, "get_factor")
         return resp.json()
 

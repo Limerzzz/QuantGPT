@@ -52,7 +52,7 @@ async def upload_to_cloud(
     user: User = Depends(get_current_user),
 ):
     if not is_configured():
-        raise HTTPException(400, "QuantGPT Cloud API key not configured. Set QUANTGPT_CLOUD_API_KEY environment variable.")
+        raise HTTPException(400, "QuantGPT Cloud not configured. Set QUANTGPT_CLOUD_EMAIL and QUANTGPT_CLOUD_PASSWORD in .env")
 
     name = req.name or req.expression[:80]
 
